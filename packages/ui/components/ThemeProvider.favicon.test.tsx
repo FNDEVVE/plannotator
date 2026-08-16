@@ -20,14 +20,14 @@ function getFaviconLink(): HTMLLinkElement | null {
   return document.head.querySelector<HTMLLinkElement>('link[rel="icon"]');
 }
 
-async function mount(): Promise<void> {
+async function mount(manageFavicon = true): Promise<void> {
   if (!hasDom) return;
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
   await act(async () => {
     root!.render(
-      <ThemeProvider>
+      <ThemeProvider manageFavicon={manageFavicon}>
         <div>App</div>
       </ThemeProvider>,
     );
@@ -114,5 +114,83 @@ describe('ThemeProvider favicon synchronization', () => {
     expect(link?.href).toBe(CLASSIC_FAVICON_DATA_URL);
     expect(link?.type).toBe('image/svg+xml');
     expect(link?.hasAttribute('sizes')).toBe(false);
+  });
+});
+
+/**
+ * The published package installs into host applications with their own
+ * branding. Mounting the provider must not repaint a host's tab icon, so favicon
+ * ownership is opt-in and these two cases are the contract: the default mount
+ * leaves document.head exactly as it found it, the opt-in mount does not.
+ */
+describe('ThemeProvider favicon ownership is opt-in', () => {
+  beforeEach(() => {
+    stored.clear();
+    setStorageBackend({
+      getItem: (key) => stored.get(key) ?? null,
+      setItem: (key, value) => {
+        stored.set(key, value);
+      },
+      removeItem: (key) => {
+        stored.delete(key);
+      },
+    });
+    if (hasDom) {
+      for (const link of document.head.querySelectorAll('link[rel="icon"]')) link.remove();
+    }
+  });
+
+  afterEach(async () => {
+    if (hasDom) {
+      await unmount();
+      for (const link of document.head.querySelectorAll('link[rel="icon"]')) link.remove();
+    }
+    resetStorageBackend();
+  });
+
+  test.skipIf(!hasDom)('a default mount creates no favicon link', async () => {
+    stored.set('plannotator-favicon', 'classic');
+    configStore.loadFromBackend();
+
+    await mount(false);
+
+    expect(getFaviconLink()).toBeNull();
+  });
+
+  test.skipIf(!hasDom)("a default mount leaves a host's own favicon link untouched", async () => {
+    const hostLink = document.createElement('link');
+    hostLink.rel = 'icon';
+    hostLink.type = 'image/png';
+    hostLink.href = 'https://host.example/brand.png';
+    document.head.appendChild(hostLink);
+
+    stored.set('plannotator-favicon', 'classic');
+    configStore.loadFromBackend();
+
+    await mount(false);
+
+    expect(getFaviconLink()?.href).toBe('https://host.example/brand.png');
+    expect(getFaviconLink()?.type).toBe('image/png');
+
+    // And a later preference change is still ignored while ownership is off.
+    await act(async () => {
+      configStore.set('faviconStyle', 'totman');
+    });
+    expect(getFaviconLink()?.href).toBe('https://host.example/brand.png');
+  });
+
+  test.skipIf(!hasDom)("an opt-in mount does take over the host's favicon link", async () => {
+    const hostLink = document.createElement('link');
+    hostLink.rel = 'icon';
+    hostLink.type = 'image/png';
+    hostLink.href = 'https://host.example/brand.png';
+    document.head.appendChild(hostLink);
+
+    stored.set('plannotator-favicon', 'classic');
+    configStore.loadFromBackend();
+
+    await mount(true);
+
+    expect(getFaviconLink()?.href).toBe(CLASSIC_FAVICON_DATA_URL);
   });
 });
