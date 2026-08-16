@@ -99,6 +99,7 @@ import {
   type MarkerEngineId,
 } from "./marker-review";
 import { loadConfig, saveConfig, detectGitUser, getServerConfig, parseReviewAnalysisConfig, resolveAIEnabled, resolveCursorSandbox, resolveGuideHistory } from "./config";
+import { isFaviconStyle, type FaviconStyle } from "@plannotator/shared/favicon";
 import { type PRMetadata, type PRRef, type PRReviewFileComment, type PRStackTree, type PRListItem, fetchPR, fetchPRFileContent, fetchPRContext, submitPRReview, fetchPRViewedFiles, markPRFilesViewed, fetchPRStack, fetchPRList, getPRUser, parsePRUrl, prRefFromMetadata, isSameProject, getDisplayRepo, getMRLabel, getMRNumberLabel, prCommandRuntime } from "./pr";
 import {
   PR_CONTEXT_HEARTBEAT_COMMENT,
@@ -2812,11 +2813,12 @@ export async function startReviewServer(
           // API: Update user config (write-back to ~/.plannotator/config.json)
           if (url.pathname === "/api/config" && req.method === "POST") {
             try {
-              const body = (await req.json()) as { displayName?: string; diffOptions?: Record<string, unknown>; theme?: Record<string, unknown>; reviewAnalysis?: Record<string, unknown>; conventionalComments?: boolean; conventionalLabels?: unknown[] | null };
+              const body = (await req.json()) as { displayName?: string; diffOptions?: Record<string, unknown>; theme?: Record<string, unknown>; favicon?: FaviconStyle; reviewAnalysis?: Record<string, unknown>; conventionalComments?: boolean; conventionalLabels?: unknown[] | null };
               const toSave: Record<string, unknown> = {};
               if (body.displayName !== undefined) toSave.displayName = body.displayName;
               if (body.diffOptions !== undefined) toSave.diffOptions = body.diffOptions;
               if (body.theme !== undefined) toSave.theme = body.theme;
+              if (isFaviconStyle(body.favicon)) toSave.favicon = body.favicon;
               if (body.reviewAnalysis !== undefined) {
                 const reviewAnalysis = parseReviewAnalysisConfig(body.reviewAnalysis);
                 if (!reviewAnalysis) {

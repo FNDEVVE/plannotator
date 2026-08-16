@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { configStore } from '../config/configStore';
 import { readThemePairCookies, writeThemePairCookies } from '../config/settings';
 import { useConfigValue } from '../config/useConfig';
+import { faviconDataUrl } from '@plannotator/core/favicon';
 import { storage } from '../utils/storage';
 import {
   BUILT_IN_THEMES,
@@ -124,6 +125,25 @@ export function ThemeProvider({
   const storePair = useConfigValue('themePair');
   const pair = pendingSeed.current ?? storePair;
   const mode = pair.mode;
+  const faviconStyle = useConfigValue('faviconStyle');
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    let link = document.head.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
+    if (faviconStyle === 'classic') {
+      link.type = 'image/svg+xml';
+      link.removeAttribute('sizes');
+    } else {
+      link.type = 'image/png';
+      link.setAttribute('sizes', '64x64');
+    }
+    link.href = faviconDataUrl(faviconStyle);
+  }, [faviconStyle]);
 
   // Hand the resolved pair to the store as a SEED, not a user choice: seeding
   // writes memory + cookies only. Routing it through set() would queue a

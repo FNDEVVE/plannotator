@@ -42,6 +42,7 @@ import {
 import { getRepoInfo } from "./repo";
 import { detectProjectName } from "./project";
 import { loadConfig, saveConfig, detectGitUser, getServerConfig, resolveAIEnabled } from "./config";
+import { isFaviconStyle, type FaviconStyle } from "@plannotator/shared/favicon";
 import { readImprovementHook, getImprovementHookExpectedPath } from "@plannotator/shared/improvement-hooks";
 import { composeImproveContext } from "@plannotator/shared/pfm-reminder";
 import { handleImage, handleUpload, handleAgents, handleServerReady, handleDraftSave, handleDraftLoad, handleDraftDelete, handleApiNotFound, handleFavicon, handleReferenceSkills, handleReferenceSkillContent, handleSaveNotes, readDraftGenerationFromBody, type OpencodeClient } from "./shared-handlers";
@@ -321,11 +322,12 @@ export async function startPlannotatorServer(
           // API: Update user config (write-back to ~/.plannotator/config.json)
           if (url.pathname === "/api/config" && req.method === "POST") {
             try {
-              const body = (await req.json()) as { displayName?: string; diffOptions?: Record<string, unknown>; theme?: Record<string, unknown>; conventionalComments?: boolean; conventionalLabels?: unknown[] | null; pfmReminder?: boolean };
+              const body = (await req.json()) as { displayName?: string; diffOptions?: Record<string, unknown>; theme?: Record<string, unknown>; favicon?: FaviconStyle; conventionalComments?: boolean; conventionalLabels?: unknown[] | null; pfmReminder?: boolean };
               const toSave: Record<string, unknown> = {};
               if (body.displayName !== undefined) toSave.displayName = body.displayName;
               if (body.diffOptions !== undefined) toSave.diffOptions = body.diffOptions;
               if (body.theme !== undefined) toSave.theme = body.theme;
+              if (isFaviconStyle(body.favicon)) toSave.favicon = body.favicon;
               if (body.conventionalComments !== undefined) toSave.conventionalComments = body.conventionalComments;
               if (body.conventionalLabels !== undefined) toSave.conventionalLabels = body.conventionalLabels;
               if (body.pfmReminder !== undefined) toSave.pfmReminder = body.pfmReminder;
