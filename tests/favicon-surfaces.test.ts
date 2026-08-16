@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { inflateSync } from "node:zlib";
-import { FAVICON_PNG_BYTES } from "../packages/core/favicon";
+import { CLASSIC_FAVICON_SVG, FAVICON_PNG_BYTES } from "../packages/core/favicon";
 
 // The two server-served entry points declare no type/sizes: their /favicon.png
 // is answered by handleFavicon(), which picks PNG or the classic SVG from the
@@ -139,6 +139,15 @@ describe("favicon surfaces", () => {
     expect(stats.transparentPixels).toBeGreaterThan(0);
     expect(stats.partialAlphaPixels).toBeGreaterThan(0);
     expect(stats.opaquePixels).toBeGreaterThan(0);
+  });
+
+  test("the optional classic style is the archival pre-Totman asset", () => {
+    // The second thing /favicon.png can now answer with, so it belongs in this
+    // enumeration alongside the production PNG. Pinned to the exact bytes that
+    // shipped at 5b91c543^.
+    expect(createHash("sha256").update(CLASSIC_FAVICON_SVG).digest("hex")).toBe(
+      "27d33cff3d4515801f48e1cbaceec777ba802a7d341b22b2c0444d82b303cb49",
+    );
   });
 
   test("the marketing site ships the selected production 256px asset", async () => {

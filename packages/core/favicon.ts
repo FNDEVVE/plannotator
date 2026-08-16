@@ -116,6 +116,8 @@ export function isFaviconStyle(value: unknown): value is FaviconStyle {
 
 /**
  * Exact historical pre-Totman dark-navy favicon SVG with gold highlight.
+ * Byte-identical to the FAVICON_SVG that shipped at 5b91c543^.
+ * Source SHA-256: 27d33cff3d4515801f48e1cbaceec777ba802a7d341b22b2c0444d82b303cb49
  */
 export const CLASSIC_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <rect width="64" height="64" rx="14" fill="#070b14"/>

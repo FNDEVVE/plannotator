@@ -39,6 +39,15 @@ describe("production favicon", () => {
 });
 
 describe("favicon style switcher", () => {
+  test("embeds the historical pre-Totman SVG exactly", () => {
+    // Pinned on purpose: the classic style is an archival asset, byte-identical
+    // to the FAVICON_SVG that shipped at 5b91c543^. A "harmless" reformat of the
+    // template literal would silently ship a different icon under the same name.
+    expect(createHash("sha256").update(CLASSIC_FAVICON_SVG).digest("hex")).toBe(
+      "27d33cff3d4515801f48e1cbaceec777ba802a7d341b22b2c0444d82b303cb49",
+    );
+  });
+
   test("faviconDataUrl('totman') returns exact production PNG data URL", () => {
     expect(faviconDataUrl("totman")).toBe(FAVICON_PNG_DATA_URL);
   });
