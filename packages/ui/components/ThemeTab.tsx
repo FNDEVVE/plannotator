@@ -27,6 +27,35 @@ const SyntaxLinesIcon: React.FC<{ className?: string }> = ({ className }) => (
   </svg>
 );
 
+/**
+ * The favicon style choices. Rendered in both layouts, so it lives in one place.
+ * The compact layout drops the visible "Favicon" heading the full layout has, so
+ * the group carries its own accessible name and two unlabelled image buttons are
+ * never all a screen reader gets.
+ */
+const FaviconStyleControl: React.FC<{ selected: FaviconStyle }> = ({ selected }) => (
+  <div className="flex gap-1" role="group" aria-label="Favicon style">
+    {FAVICON_STYLES.map(({ id, label }) => (
+      <button
+        key={id}
+        type="button"
+        aria-pressed={selected === id}
+        onClick={() => configStore.set('faviconStyle', id)}
+        className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+          selected === id
+            ? 'bg-primary text-primary-foreground'
+            : 'bg-muted text-muted-foreground hover:text-foreground'
+        }`}
+      >
+        <span className="flex items-center gap-1.5">
+          <img src={faviconDataUrl(id)} alt="" className="w-5 h-5 rounded-sm shrink-0" />
+          {label}
+        </span>
+      </button>
+    ))}
+  </div>
+);
+
 export const ThemeTab: React.FC<ThemeTabProps> = ({ onPreview, compact }) => {
   const {
     mode,
@@ -36,6 +65,7 @@ export const ThemeTab: React.FC<ThemeTabProps> = ({ onPreview, compact }) => {
     setHalfTheme,
     availableThemes,
     preferredMode,
+    manageFavicon,
   } = useTheme();
   const faviconStyle = useConfigValue('faviconStyle');
 
@@ -92,29 +122,10 @@ export const ThemeTab: React.FC<ThemeTabProps> = ({ onPreview, compact }) => {
             </button>
           ))}
         </div>
-        {!compact && (
+        {!compact && manageFavicon && (
           <div className="space-y-1.5 pt-1">
             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Favicon</label>
-            <div className="flex gap-1">
-              {FAVICON_STYLES.map(({ id, label }) => (
-                <button
-                  key={id}
-                  type="button"
-                  aria-pressed={faviconStyle === id}
-                  onClick={() => configStore.set('faviconStyle', id)}
-                  className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                    faviconStyle === id
-                      ? 'bg-primary text-primary-foreground'
-                      : 'bg-muted text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  <span className="flex items-center gap-1.5">
-                    <img src={faviconDataUrl(id)} alt="" className="w-5 h-5 rounded-sm shrink-0" />
-                    {label}
-                  </span>
-                </button>
-              ))}
-            </div>
+            <FaviconStyleControl selected={faviconStyle} />
           </div>
         )}
         {!compact && (
@@ -124,26 +135,7 @@ export const ThemeTab: React.FC<ThemeTabProps> = ({ onPreview, compact }) => {
         )}
         {compact && (
           <>
-            <div className="flex gap-1">
-              {FAVICON_STYLES.map(({ id, label }) => (
-                <button
-                  key={id}
-                  type="button"
-                  aria-pressed={faviconStyle === id}
-                  onClick={() => configStore.set('faviconStyle', id)}
-                  className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                    faviconStyle === id
-                      ? 'bg-primary text-primary-foreground'
-                      : 'bg-muted text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  <span className="flex items-center gap-1.5">
-                    <img src={faviconDataUrl(id)} alt="" className="w-5 h-5 rounded-sm shrink-0" />
-                    {label}
-                  </span>
-                </button>
-              ))}
-            </div>
+            {manageFavicon && <FaviconStyleControl selected={faviconStyle} />}
             <div className="ml-auto">{summary}</div>
           </>
         )}
