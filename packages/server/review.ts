@@ -86,7 +86,20 @@ import {
 } from "./claude-review";
 import { createTourSession, TOUR_EMPTY_OUTPUT_ERROR } from "./tour/tour-review";
 import { createGuideSession, GUIDE_EMPTY_OUTPUT_ERROR } from "./guide/guide-review";
-import { createGuideStoreSession, SAVED_GUIDE_ID_PREFIX } from "@plannotator/shared/guide-store";
+import { GuideShareError, shareGuide, unshareBeforeDelete, unshareGuide } from "./guide/guide-share";
+import { createGuideStoreSession, SAVED_GUIDE_ID_PREFIX, updateGuideShare } from "@plannotator/shared/guide-store";
+import { resolveGuideShareUrl, resolveSharingEnabled } from "@plannotator/shared/config";
+import {
+  buildGuideSnapshot,
+  createGuideHtml,
+  detectGuideLanguages,
+  guideExportFilename,
+  resolveGuideViewerAssets,
+  type GuideLaunchReview,
+  type GuideSnapshot,
+  type GuideSnapshotSource,
+} from "@plannotator/shared/guide-format";
+import { GUIDE_VIEWER_MANIFEST } from "@plannotator/shared/guide-viewer-manifest";
 import {
   MARKER_ENGINES,
   composeMarkerReviewPrompt,
@@ -265,6 +278,41 @@ export async function startReviewServer(
     getFallbackDir: () => workspace?.root ?? options.agentCwd ?? process.cwd(),
     writesEnabled: () => resolveGuideHistory(loadConfig()),
   });
+
+  /** Job fields the store persists for export provenance (engine/model already on the job). */
+  const guideSaveJob = (job: AgentJobInfo) => ({
+    id: job.id,
+    engine: job.engine,
+    model: job.model,
+    generatedAt: job.endedAt ?? Date.now(),
+  });
+
+  /**
+   * Snapshot for exporting a guide: `saved:{id}` → the store; a live job →
+   * this session's launch review + guide (the persisted copy is the fallback,
+   * e.g. when the in-memory review was evicted).
+   */
+  async function resolveGuideSnapshotForExport(jobId: string): Promise<GuideSnapshot | null> {
+    if (jobId.startsWith(SAVED_GUIDE_ID_PREFIX)) {
+      return guideStore.getSavedGuideSnapshot(jobId.slice(SAVED_GUIDE_ID_PREFIX.length));
+    }
+    const live = guide.getGuide(jobId);
+    const launchReview = guide.getLaunchReview(jobId);
+    if (live && launchReview) {
+      const job = agentJobs.getJob(jobId);
+      return buildGuideSnapshot({
+        guide: live,
+        reviewed: live.reviewed,
+        review: launchReview,
+        generator: {
+          engine: job?.engine,
+          model: job?.model,
+          generatedAt: job?.endedAt ? new Date(job.endedAt).toISOString() : undefined,
+        },
+      });
+    }
+    return guideStore.getJobGuideSnapshot(jobId);
+  }
 
   // Mutable state for diff switching
   let currentPatch = options.rawPatch;
@@ -1184,6 +1232,41 @@ export async function startReviewServer(
         // same as changedFilesSnapshot above.
         const guideContext = (repairOf ? agentJobs.getJob(repairOf)?.guideContext : undefined)
           ?? await guideStore.captureLaunchContext();
+        // The review this guide describes, for portable export (decision
+        // record D6): captured from the SAME launch-time snapshot as the
+        // patch the model is given, never re-read at export time. Repairs
+        // reuse the FAILED job's own review, like changedFilesSnapshot.
+        const commitSha = parseCommitDiffType(String(worktreeParts?.subType ?? launchDiffType))?.sha;
+        const launchSource: GuideSnapshotSource = workspacePrompt
+          ? { kind: "workspace", ...(repoInfo?.display && { repo: repoInfo.display }) }
+          : launchMetadata
+            ? {
+                kind: "pr",
+                repo: getDisplayRepo(launchMetadata),
+                branch: launchMetadata.headBranch,
+                headSha: launchMetadata.headSha,
+                pr: {
+                  url: launchMetadata.url,
+                  number: launchMetadata.platform === "github" ? launchMetadata.number : launchMetadata.iid,
+                  title: launchMetadata.title,
+                  platform: launchMetadata.platform,
+                },
+              }
+            : {
+                kind: commitSha ? "commit" : "local",
+                ...(repoInfo?.display && { repo: repoInfo.display }),
+                ...(clientGitContext?.currentBranch && { branch: clientGitContext.currentBranch }),
+                ...(guideContext.headSha && { headSha: guideContext.headSha }),
+                ...(commitSha && { commitSha }),
+              };
+        const launchReview: GuideLaunchReview = (repairOf ? guide.getLaunchReview(repairOf) : null) ?? {
+          rawPatch: launchPatch,
+          gitRef: launchGitRef,
+          diffType: String(launchDiffType),
+          ...(launchBase && { base: launchBase }),
+          source: launchSource,
+          ...(typeof config?.instructions === "string" && config.instructions.trim() && { customInstructions: config.instructions }),
+        };
         return {
           ...built,
           prUrl: launchPrUrl,
@@ -1193,6 +1276,7 @@ export async function startReviewServer(
           reviewProfileLabel: reviewProfile.label,
           changedFilesSnapshot,
           guideContext,
+          launchReview,
         };
       }
 
@@ -1433,16 +1517,17 @@ export async function startReviewServer(
         // current patch only if the snapshot is missing (defensive; should
         // not happen in practice — see agent-jobs.ts's changedFilesSnapshot).
         const changedFiles = meta.changedFilesSnapshot ?? listPatchFiles(currentPatch).map((f) => f.path);
-        const { summary, error } = await guide.onJobComplete({ job, meta, changedFiles });
+        const { summary, error } = await guide.onJobComplete({ job, meta, changedFiles, launchReview: meta.launchReview });
         if (summary) {
           job.summary = summary;
           // Autosave (#1112): only guides that passed validateGuideOutput ever
           // reach guideResults, so a getGuide hit here IS the validation gate.
           // Failed/invalid guides never write. The job's launch-time context
           // snapshot labels the envelope — never the live session state, which
-          // may have PR/diff-switched while the job ran.
+          // may have PR/diff-switched while the job ran. The launch-time review
+          // (the diff the guide describes) is stored beside it for export.
           const validated = guide.getGuide(job.id);
-          if (validated) await guideStore.saveForJob(job, validated, job.guideContext);
+          if (validated) await guideStore.saveForJob(guideSaveJob(job), validated, job.guideContext, meta.launchReview);
         } else {
           // Same fail-closed precedent as Tour: an exit-0 job with empty,
           // malformed, or fully-invalidated output must not look like a
@@ -1604,15 +1689,150 @@ export async function startReviewServer(
             }
           }
 
+          // API: Portable export of a guide (decision record D1/D9). Resolves
+          // `saved:{id}` from the store and live ids from this session's
+          // launch review (persisted copy as fallback). No size gate: the file
+          // is as big as the diff, and that is the user's call.
+          const guideExportMatch = url.pathname.match(/^\/api\/guide\/([^/]+)\/(export|export-info)$/);
+          if (guideExportMatch && req.method === "GET") {
+            const jobId = decodeURIComponent(guideExportMatch[1]);
+            const snapshot = await resolveGuideSnapshotForExport(jobId);
+            if (!snapshot) {
+              return Response.json({ error: "This guide cannot be exported: its diff was not retained." }, { status: 404 });
+            }
+            const viewer = resolveGuideViewerAssets(GUIDE_VIEWER_MANIFEST, { baseUrl: process.env.PLANNOTATOR_GUIDE_VIEWER_URL });
+            const html = createGuideHtml(snapshot, { viewer });
+            const filename = guideExportFilename(snapshot.guide.title);
+            if (guideExportMatch[2] === "export-info") {
+              return Response.json({
+                bytes: new TextEncoder().encode(html).byteLength,
+                filename,
+                languages: detectGuideLanguages(snapshot.review.rawPatch),
+              });
+            }
+            return new Response(html, {
+              status: 200,
+              headers: {
+                "Content-Type": "text/html; charset=utf-8",
+                "Content-Disposition": `attachment; filename="${filename}"`,
+                "Cache-Control": "no-store",
+              },
+            });
+          }
+
+          // API: Share a guide on the guide host (guide share hosting
+          // contract §7). POST uploads (encrypted unless `public`) and records
+          // the link on the saved envelope; DELETE removes it with the stored
+          // token; share-info tells the UI whether sharing is on and whether a
+          // link already exists. The mutating verbs carry the same
+          // cross-origin guard as the other state-changing endpoints: an
+          // upload publishes the diff off-machine.
+          const guideShareMatch = url.pathname.match(/^\/api\/guide\/([^/]+)\/(share|share-info)$/);
+          if (guideShareMatch && guideShareMatch[2] === "share-info" && req.method === "GET") {
+            const jobId = decodeURIComponent(guideShareMatch[1]);
+            const config = loadConfig();
+            const existing = (await guideStore.locateEnvelope(jobId))?.envelope.share;
+            return Response.json({
+              enabled: resolveSharingEnabled(config),
+              serviceUrl: resolveGuideShareUrl(config),
+              ...(existing ? { existing: { url: existing.url, createdAt: existing.createdAt } } : {}),
+            });
+          }
+          if (guideShareMatch && guideShareMatch[2] === "share" && (req.method === "POST" || req.method === "DELETE")) {
+            if (!callFlowInstallOriginAllowed(req.headers.get("origin"), url.host)) {
+              return Response.json({ error: "Cross-origin share requests are not allowed" }, { status: 403 });
+            }
+            const jobId = decodeURIComponent(guideShareMatch[1]);
+            const config = loadConfig();
+            const serviceUrl = resolveGuideShareUrl(config);
+            if (req.method === "POST") {
+              if (!resolveSharingEnabled(config)) return Response.json({ error: "sharing disabled" }, { status: 403 });
+              // Every body field is optional, so no body at all means the defaults.
+              let body: { public?: unknown; ttlSeconds?: unknown };
+              try {
+                const raw = await req.text();
+                const parsed: unknown = raw.trim() === "" ? {} : JSON.parse(raw);
+                if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
+                body = parsed as { public?: unknown; ttlSeconds?: unknown };
+              } catch {
+                return Response.json({ error: "Invalid JSON" }, { status: 400 });
+              }
+              if (body.public !== undefined && typeof body.public !== "boolean") return Response.json({ error: "public must be a boolean" }, { status: 400 });
+              if (body.ttlSeconds !== undefined && (typeof body.ttlSeconds !== "number" || !Number.isSafeInteger(body.ttlSeconds) || body.ttlSeconds <= 0)) {
+                return Response.json({ error: "ttlSeconds must be a positive integer" }, { status: 400 });
+              }
+              // One link per guide: the envelope is the only place the delete
+              // token lives, so a second upload would orphan the first on the
+              // host. Remove the existing link before creating another.
+              const located = await guideStore.locateEnvelope(jobId);
+              const existing = located?.envelope.share;
+              if (existing) {
+                return Response.json({ error: "This guide already has a share link. Remove it before creating another.", url: existing.url }, { status: 409 });
+              }
+              const snapshot = await resolveGuideSnapshotForExport(jobId);
+              if (!snapshot) {
+                return Response.json({ error: "This guide cannot be shared: its diff was not retained." }, { status: 404 });
+              }
+              try {
+                const shared = await shareGuide(snapshot, {
+                  serviceUrl,
+                  mode: body.public === true ? "plain" : "encrypted",
+                  ...(body.ttlSeconds !== undefined ? { ttlSeconds: body.ttlSeconds } : {}),
+                  viewer: GUIDE_VIEWER_MANIFEST,
+                });
+                // `recorded` tells the client whether this Plannotator can
+                // remove the link later; without an envelope (guide history
+                // off, or an autosave that never happened) only the one-time
+                // token can.
+                const recorded = located
+                  ? updateGuideShare(located.repoKey, located.id, {
+                      id: shared.id,
+                      url: shared.url,
+                      createdAt: new Date().toISOString(),
+                      deleteToken: shared.deleteToken,
+                      serviceUrl,
+                    })
+                  : false;
+                return Response.json({ ...shared, recorded });
+              } catch (e) {
+                if (e instanceof GuideShareError) return Response.json({ error: e.message }, { status: 502 });
+                throw e;
+              }
+            }
+            // DELETE: the record is the only place the delete token lives, and
+            // it names the host the link was created on; the configured share
+            // URL may have changed since (or differ from the CLI shell that
+            // created the link), and a 404 from the wrong host would forget a
+            // link that is still live.
+            const located = await guideStore.locateEnvelope(jobId);
+            const record = located?.envelope.share;
+            if (!located || !record) return Response.json({ error: "No share link for this guide" }, { status: 404 });
+            try {
+              await unshareGuide(record.id, record.deleteToken, { serviceUrl: record.serviceUrl });
+            } catch (e) {
+              // Already gone on the host (expired or removed elsewhere): the
+              // link is dead either way, so forget it here too.
+              if (!(e instanceof GuideShareError && e.status === 404)) {
+                if (e instanceof GuideShareError) return Response.json({ error: e.message }, { status: 502 });
+                throw e;
+              }
+            }
+            updateGuideShare(located.repoKey, located.id, null);
+            return new Response(null, { status: 204 });
+          }
+
           // API: List saved guides for the current repo (#1112)
           if (url.pathname === "/api/guides" && req.method === "GET") {
             return Response.json(await guideStore.listSaved());
           }
 
-          // API: Delete a saved guide (#1112)
+          // API: Delete a saved guide (#1112). Its share link goes with it,
+          // best effort: the envelope is the only copy of the delete token.
           const savedGuideDeleteMatch = url.pathname.match(/^\/api\/guides\/([^/]+)$/);
           if (savedGuideDeleteMatch && req.method === "DELETE") {
-            const ok = await guideStore.deleteSaved(decodeURIComponent(savedGuideDeleteMatch[1]));
+            const savedId = decodeURIComponent(savedGuideDeleteMatch[1]);
+            await unshareBeforeDelete((await guideStore.locateEnvelope(`${SAVED_GUIDE_ID_PREFIX}${savedId}`))?.envelope.share);
+            const ok = await guideStore.deleteSaved(savedId);
             if (!ok) return Response.json({ error: "Guide not found" }, { status: 404 });
             return Response.json({ ok: true });
           }
@@ -1654,7 +1874,7 @@ export async function startReviewServer(
               // gate as an automatic one — persist it too (#1112), labeled
               // with the job's own launch-time context snapshot.
               const repaired = guide.getGuide(jobId);
-              if (repaired) await guideStore.saveForJob(existingJob, repaired, existingJob.guideContext);
+              if (repaired) await guideStore.saveForJob(guideSaveJob(existingJob), repaired, existingJob.guideContext, guide.getLaunchReview(jobId) ?? undefined);
               return Response.json({ ok: true, sections, files });
             } catch {
               return Response.json({ error: "Invalid JSON" }, { status: 400 });
