@@ -11,7 +11,8 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { execSync } from "child_process";
 
 import type { DefaultDiffType, DiffLineBgIntensity, DiffOptions, ThemeConfig } from '@plannotator/core/config-types';
-export type { DefaultDiffType, DiffLineBgIntensity, DiffOptions, ThemeConfig };
+import { isFaviconStyle, type FaviconStyle } from './favicon';
+export type { DefaultDiffType, DiffLineBgIntensity, DiffOptions, ThemeConfig, FaviconStyle };
 
 /** Single conventional comment label entry stored in config.json */
 export interface CCLabelConfig {
@@ -228,6 +229,11 @@ export interface PlannotatorConfig {
    * never read back. Failures are non-fatal.
    */
   todoProvider?: "auto" | "off";
+  /**
+   * Selected favicon style for Plannotator application surfaces:
+   * 'totman' (production brand mascot) or 'classic' (historical dark-navy P tile).
+   */
+  favicon?: FaviconStyle;
 }
 
 /** Parse the only server-writable call-review analysis flags. */
@@ -327,6 +333,7 @@ export function getServerConfig(gitUser: string | null): {
   displayName?: string;
   diffOptions?: DiffOptions;
   theme?: ThemeConfig;
+  favicon?: FaviconStyle;
   reviewAnalysis: NonNullable<PlannotatorConfig["reviewAnalysis"]>;
   gitUser?: string;
   conventionalComments?: boolean;
@@ -337,6 +344,7 @@ export function getServerConfig(gitUser: string | null): {
     displayName: cfg.displayName,
     diffOptions: cfg.diffOptions,
     ...(cfg.theme !== undefined && { theme: cfg.theme }),
+    ...(isFaviconStyle(cfg.favicon) && { favicon: cfg.favicon }),
     // These values gate server-side work, so always make the resolved defaults
     // explicit. The client must not revive a stale cookie that disagrees with
     // the server when the config leaves either optional leaf unset.

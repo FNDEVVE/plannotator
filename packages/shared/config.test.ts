@@ -1,4 +1,7 @@
-import { describe, expect, test, beforeEach, afterAll, spyOn } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach, afterAll, spyOn } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   resolveAIEnabled,
   resolveCursorSandbox,
@@ -10,6 +13,9 @@ import {
   resolveUrlHost,
   isValidUrlHost,
   parseReviewAnalysisConfig,
+  loadConfig,
+  saveConfig,
+  getServerConfig,
   resolveGuideShareUrl,
   resolveSharingEnabled,
   DEFAULT_GUIDE_SHARE_URL,
@@ -333,6 +339,42 @@ describe("config.json boolean coercion", () => {
       });
     });
   }
+});
+
+describe("favicon config persistence", () => {
+  const originalDataDir = process.env.PLANNOTATOR_DATA_DIR;
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "plannotator-config-test-"));
+    process.env.PLANNOTATOR_DATA_DIR = tempDir;
+  });
+
+  afterEach(() => {
+    if (originalDataDir !== undefined) {
+      process.env.PLANNOTATOR_DATA_DIR = originalDataDir;
+    } else {
+      delete process.env.PLANNOTATOR_DATA_DIR;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  test("persists and reads valid favicon styles via saveConfig and getServerConfig", () => {
+    saveConfig({ favicon: "classic" });
+    expect(loadConfig().favicon).toBe("classic");
+    expect(getServerConfig(null).favicon).toBe("classic");
+
+    saveConfig({ favicon: "totman" });
+    expect(loadConfig().favicon).toBe("totman");
+    expect(getServerConfig(null).favicon).toBe("totman");
+  });
+
+  test("omits unknown favicon styles from getServerConfig", () => {
+    const unknownFavicon = "unknown" as unknown as PlannotatorConfig["favicon"];
+    saveConfig({ favicon: unknownFavicon });
+    expect(loadConfig().favicon).toBe(unknownFavicon);
+    expect(getServerConfig(null).favicon).toBeUndefined();
+  });
 });
 
 describe("resolveGuideShareUrl", () => {

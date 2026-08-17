@@ -3519,7 +3519,7 @@ const ReviewApp: React.FC = () => {
 
   if (isLoading) {
     return (
-      <ThemeProvider defaultTheme="dark">
+      <ThemeProvider defaultTheme="dark" manageFavicon>
         <div className="pn-app-viewport flex items-center justify-center bg-background">
           <div className="text-muted-foreground text-sm">Loading diff...</div>
         </div>
@@ -3528,7 +3528,7 @@ const ReviewApp: React.FC = () => {
   }
 
   return (
-    <ThemeProvider defaultTheme="dark">
+    <ThemeProvider defaultTheme="dark" manageFavicon>
       <TooltipProvider delayDuration={200} skipDelayDuration={100}>
       <ReviewStateProvider value={reviewStateValue}>
       <JobLogsProvider value={jobLogsValue}>
