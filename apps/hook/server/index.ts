@@ -503,6 +503,7 @@ const pasteApiUrl = process.env.PLANNOTATOR_PASTE_URL || undefined;
 // Detect calling agent from environment variables set by agent runtimes.
 // Priority:
 //   PLANNOTATOR_ORIGIN (explicit override, validated against AGENT_CONFIG)
+//   > oh-my-pi harness (OMPCODE)
 //   > Amp plugin wrappers (PLANNOTATOR_ORIGIN=amp)
 //   > Droid command wrappers (PLANNOTATOR_ORIGIN=droid)
 //   > Codex (CODEX_THREAD_ID)
@@ -516,6 +517,7 @@ const pasteApiUrl = process.env.PLANNOTATOR_PASTE_URL || undefined;
 const originOverride = process.env.PLANNOTATOR_ORIGIN as Origin | undefined;
 const detectedOrigin: Origin =
   (originOverride && originOverride in AGENT_CONFIG) ? originOverride :
+  process.env.OMPCODE ? "oh-my-pi" :
   process.env.CODEX_THREAD_ID ? "codex" :
   process.env.COPILOT_CLI ? "copilot-cli" :
   process.env.OPENCODE ? "opencode" :
