@@ -19,7 +19,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { createHash } from "node:crypto";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
-import { startAnnotateServer, liveAppDraftIdentity } from "./annotate";
+import { liveAppDraftIdentity, runGuardedShutdown, startAnnotateServer } from "./annotate";
 import { getServerConfig, loadConfig } from "./config";
 import { deriveAnnotateHistorySlug } from "@plannotator/shared/annotate-history";
 import { getPlannotatorDataDir } from "@plannotator/shared/data-dir";
@@ -2108,5 +2108,46 @@ describe("annotate server: live app mode (annotate-app)", () => {
     await expect(
       startLiveServer("http://127.0.0.1:65500", { tailnetPublished: true }),
     ).rejects.toThrow("Live app annotation is unavailable in tailnet-published sessions");
+  });
+});
+
+describe("annotate server: guarded shutdown (runGuardedShutdown)", () => {
+  // The live-proxy leak this guards: stop() disposes the agent terminal
+  // BEFORE the live proxy, and agent-terminal teardown is historically
+  // fragile (#1314). In a flat sequence a throw there orphaned the proxy's
+  // listener and upstream WebSockets. Each step must run even when an
+  // earlier one throws, and the listener close must run regardless.
+  test("a throwing disposer does not skip later steps or the listener close", () => {
+    const ran: string[] = [];
+    const logged: string[] = [];
+    runGuardedShutdown(
+      [
+        ["agent terminal", () => {
+          ran.push("agent terminal");
+          throw new Error("pty teardown exploded");
+        }],
+        ["live proxy", () => ran.push("live proxy")],
+      ],
+      () => ran.push("listener"),
+      (message) => logged.push(message),
+    );
+    expect(ran).toEqual(["agent terminal", "live proxy", "listener"]);
+    // The failure is reported, named after the step that threw.
+    expect(logged.some((line) => line.includes("agent terminal"))).toBe(true);
+  });
+
+  test("all steps clean: everything runs once in order, nothing is logged", () => {
+    const ran: string[] = [];
+    const logged: string[] = [];
+    runGuardedShutdown(
+      [
+        ["a", () => ran.push("a")],
+        ["b", () => ran.push("b")],
+      ],
+      () => ran.push("listener"),
+      (message) => logged.push(message),
+    );
+    expect(ran).toEqual(["a", "b", "listener"]);
+    expect(logged).toEqual([]);
   });
 });
