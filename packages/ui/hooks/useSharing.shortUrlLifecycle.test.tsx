@@ -118,6 +118,36 @@ async function waitFor(condition: () => boolean): Promise<void> {
   expect(condition()).toBe(true);
 }
 
+async function waitForSharedPayload(
+  getShareUrl: () => string | undefined,
+  predicate: (payload: SharePayload) => boolean,
+): Promise<SharePayload> {
+  let lastPayload: SharePayload | null = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const rawUrl = getShareUrl();
+    const hashIndex = rawUrl ? rawUrl.indexOf('#') : -1;
+    if (hashIndex !== -1 && rawUrl) {
+      const hash = rawUrl.slice(hashIndex + 1);
+      if (hash) {
+        try {
+          const payload = (await decompress(hash)) as SharePayload;
+          lastPayload = payload;
+          if (predicate(payload)) {
+            return payload;
+          }
+        } catch {
+          // Decompress can fail during mid-update or malformed hash
+        }
+      }
+    }
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+  expect(lastPayload ? predicate(lastPayload) : false).toBe(true);
+  return lastPayload!;
+}
+
 async function installIncomingPaste(
   payload: SharePayload,
   pasteId: string,
@@ -208,7 +238,8 @@ describe.if(hasDom)('useSharing short URL lifecycle', () => {
     const capture: HarnessCapture = { result: null, controls: null };
     const modal: ModalOptions = {};
     await mountHarness(0, capture, modal);
-    await waitFor(() => capture.result?.isLoadingShared === false && Boolean(capture.result?.shareUrl));
+    await waitFor(() => capture.result?.isLoadingShared === false);
+    await waitForSharedPayload(() => capture.result?.shareUrl, (payload) => payload.p === originalPayload.p);
 
     expect(displayedShortUrl()).toBe(incoming.incomingUrl);
     expect(service.uploads).toEqual([]);
@@ -239,7 +270,7 @@ describe.if(hasDom)('useSharing short URL lifecycle', () => {
       })));
     });
     expect(displayedShortUrl()).toBe('');
-    await waitFor(() => Boolean(capture.result?.shareUrl) && capture.result?.shareUrl !== hydratedShareUrl);
+    await waitForSharedPayload(() => capture.result?.shareUrl, (payload) => payload.p === editedMarkdown);
     const fullUrl = host!.querySelector('textarea')!.value;
     expect(fullUrl.length).toBeLessThan(2048);
     expectEditedDocument(await decompress(new URL(fullUrl).hash.slice(1)) as SharePayload);
@@ -355,7 +386,10 @@ describe.if(hasDom)('useSharing short URL lifecycle', () => {
 
     expect(capture.result?.shortShareUrl).toBe(incoming.incomingUrl);
     expect(capture.result?.isSharedSession).toBe(true);
-    await waitFor(() => Boolean(capture.result?.shareUrl));
+    await waitForSharedPayload(
+      () => capture.result?.shareUrl,
+      (p) => p.p === payload.p && p.a.length === 1,
+    );
     const hydratedShareUrl = capture.result?.shareUrl ?? '';
 
     await act(async () => {
@@ -373,10 +407,10 @@ describe.if(hasDom)('useSharing short URL lifecycle', () => {
     expect(capture.result?.shortShareUrl).toBe('');
     expect(postCount).toBe(0);
 
-    await waitFor(() => Boolean(capture.result?.shareUrl) && capture.result?.shareUrl !== hydratedShareUrl);
-    const annotatedPayload = await decompress(capture.result?.shareUrl.split('#')[1] ?? '');
-    // SAFETY: generateShareUrl produced this compressed SharePayload in the same hook.
-    const annotatedSharePayload = annotatedPayload as SharePayload;
+    const annotatedSharePayload = await waitForSharedPayload(
+      () => capture.result?.shareUrl,
+      (p) => p.a.length === 2,
+    );
     expect(annotatedSharePayload.a).toHaveLength(2);
 
     let firstLocalUrl: string | null = null;

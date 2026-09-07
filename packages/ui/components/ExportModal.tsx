@@ -328,7 +328,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   Generating short link...
                 </div>
               ) : onGenerateShortUrl ? (
-                <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                <div className={`p-3 rounded-lg border ${
+                  urlIsLarge
+                    ? 'bg-amber-500/10 border-amber-500/20'
+                    : 'bg-muted/50 border-border'
+                }`}>
                   {urlIsLarge && (
                     <p className="text-xs text-amber-600 dark:text-amber-400 mb-2">
                       This URL may be too long for some messaging apps.
