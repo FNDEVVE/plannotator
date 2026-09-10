@@ -163,7 +163,7 @@ import {
   resolveSessionLogByCwdScan,
   type RenderedMessage,
 } from "./session-log";
-import { findCodexRolloutByThreadId, getLatestCodexPlan, getRecentCodexMessages } from "./codex-session";
+import { findCodexRolloutsByThreadId, getLatestCodexPlan, getRecentCodexMessages } from "./codex-session";
 import { findCopilotPlanContent, findCopilotSessionByAncestorPids, findCopilotSessionForCwd, getRecentCopilotMessages } from "./copilot-session";
 import {
   formatInteractiveNoArgClarification,
@@ -1497,14 +1497,19 @@ if (args[0] === "sessions") {
     if (process.env.PLANNOTATOR_DEBUG) {
       console.error(`[DEBUG] Codex detected, thread ID: ${codexThreadId}`);
     }
-    const rolloutPath = findCodexRolloutByThreadId(codexThreadId);
-    if (rolloutPath) {
+    // A thread can span multiple rollout files; the newest segment may be
+    // empty or aborted, so fall back until one yields a message (#1367).
+    for (const rolloutPath of findCodexRolloutsByThreadId(codexThreadId)) {
       if (process.env.PLANNOTATOR_DEBUG) {
         console.error(`[DEBUG] Rollout: ${rolloutPath}`);
       }
-      recentMessages = getRecentCodexMessages(rolloutPath, RECENT_MESSAGES_LIMIT, { beforeActiveTurn: true })
+      const recent = getRecentCodexMessages(rolloutPath, RECENT_MESSAGES_LIMIT, { beforeActiveTurn: true })
         .map((m) => ({ messageId: m.messageId, text: m.text, lineNumbers: [], timestamp: m.timestamp }));
-      lastMessage = recentMessages[0] ?? null;
+      if (recent.length > 0) {
+        recentMessages = recent;
+        lastMessage = recent[0];
+        break;
+      }
     }
   } else if (isDroid) {
     // Droid/Factory path: resolve the current repo's session log from
@@ -2326,20 +2331,32 @@ if (args[0] === "sessions") {
   }
 
   if (event.hook_event_name === "Stop") {
-    const rolloutPath =
-      (typeof event.transcript_path === "string" && event.transcript_path) ||
-      (process.env.CODEX_THREAD_ID
-        ? findCodexRolloutByThreadId(process.env.CODEX_THREAD_ID)
-        : null);
+    const transcriptPath = typeof event.transcript_path === "string" && event.transcript_path
+      ? event.transcript_path
+      : null;
+    // A thread can span multiple rollout files, but the Stop hook asks a
+    // TURN-level question and the current turn can only live in the newest
+    // segment. Take the first existing candidate only — never fall back to an
+    // older segment: findTurnStartIndex degrades to last-turn-in-file when
+    // the turn_id is absent, so a fallback file's plan is stale by
+    // construction (older segments routinely end with an already-decided
+    // <proposed_plan>) and would deterministically reopen settled plan
+    // reviews on every turn end. Contrast the annotate-last leg above, which
+    // asks a thread-level question and correctly falls back across segments
+    // (#1367).
+    const rolloutPaths = transcriptPath
+      ? [transcriptPath]
+      : process.env.CODEX_THREAD_ID
+        ? findCodexRolloutsByThreadId(process.env.CODEX_THREAD_ID)
+        : [];
+    const rolloutPath = rolloutPaths.find((path) => existsSync(path)) ?? null;
 
-    if (!rolloutPath || !existsSync(rolloutPath)) {
-      process.exit(0);
-    }
-
-    const latestPlan = getLatestCodexPlan(rolloutPath, {
-      turnId: typeof event.turn_id === "string" ? event.turn_id : undefined,
-      stopHookActive: !!event.stop_hook_active,
-    });
+    const latestPlan = rolloutPath
+      ? getLatestCodexPlan(rolloutPath, {
+          turnId: typeof event.turn_id === "string" ? event.turn_id : undefined,
+          stopHookActive: !!event.stop_hook_active,
+        })
+      : null;
 
     if (!latestPlan?.text) {
       process.exit(0);
