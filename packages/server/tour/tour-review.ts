@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import { mkdir, writeFile, readFile, unlink } from "node:fs/promises";
 import { getPlannotatorDataDir } from "@plannotator/shared/data-dir";
 import type { DiffType } from "../vcs";
@@ -413,17 +414,20 @@ export function buildTourClaudeCommand(prompt: string, model: string = "sonnet",
   };
 }
 
-const TOUR_SCHEMA_DIR = getPlannotatorDataDir();
-const TOUR_SCHEMA_FILE = join(TOUR_SCHEMA_DIR, "tour-schema.json");
-let tourSchemaMaterialized = false;
+/** Materialized schema path under the current data directory. */
+function tourSchemaPath(): string {
+  return join(getPlannotatorDataDir(), "tour-schema.json");
+}
 
 async function ensureTourSchemaFile(): Promise<string> {
-  if (!tourSchemaMaterialized) {
-    await mkdir(TOUR_SCHEMA_DIR, { recursive: true });
-    await writeFile(TOUR_SCHEMA_FILE, TOUR_SCHEMA_JSON);
-    tourSchemaMaterialized = true;
+  const schemaPath = tourSchemaPath();
+  // Checked per resolved path so a PLANNOTATOR_DATA_DIR change after import
+  // materializes the schema in the new location instead of reusing a flag.
+  if (!existsSync(schemaPath)) {
+    await mkdir(getPlannotatorDataDir(), { recursive: true });
+    await writeFile(schemaPath, TOUR_SCHEMA_JSON);
   }
-  return TOUR_SCHEMA_FILE;
+  return schemaPath;
 }
 
 export function generateTourOutputPath(): string {

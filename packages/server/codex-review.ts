@@ -21,19 +21,19 @@ import { classifyFindingPlacement } from "@plannotator/shared/external-annotatio
 // Debug log — only active when PLANNOTATOR_DEBUG is set
 // ---------------------------------------------------------------------------
 
-const DATA_DIR = getPlannotatorDataDir();
 const DEBUG_ENABLED = !!process.env.PLANNOTATOR_DEBUG;
-const DEBUG_LOG_PATH = join(DATA_DIR, "codex-review-debug.log");
 
 async function debugLog(label: string, data?: unknown): Promise<void> {
   if (!DEBUG_ENABLED) return;
   try {
-    await mkdir(DATA_DIR, { recursive: true });
+    // Resolved per call: PLANNOTATOR_DATA_DIR may change after import.
+    const dataDir = getPlannotatorDataDir();
+    await mkdir(dataDir, { recursive: true });
     const timestamp = new Date().toISOString();
     const line = data !== undefined
       ? `[${timestamp}] ${label}: ${typeof data === "string" ? data : JSON.stringify(data, null, 2)}\n`
       : `[${timestamp}] ${label}\n`;
-    await appendFile(DEBUG_LOG_PATH, line);
+    await appendFile(join(dataDir, "codex-review-debug.log"), line);
   } catch { /* never fail the main flow */ }
 }
 
@@ -88,21 +88,23 @@ export const CODEX_REVIEW_SCHEMA = JSON.stringify({
   additionalProperties: false,
 });
 
-const SCHEMA_DIR = DATA_DIR;
-const SCHEMA_FILE = join(SCHEMA_DIR, "codex-review-schema.json");
-let schemaMaterialized = false;
+/** Resolve the materialized schema path for the current data directory. */
+export function getCodexReviewSchemaPath(): string {
+  return join(getPlannotatorDataDir(), "codex-review-schema.json");
+}
 
 /** Ensure the schema file exists on disk and return its path. */
 async function ensureSchemaFile(): Promise<string> {
-  if (!schemaMaterialized) {
-    await mkdir(SCHEMA_DIR, { recursive: true });
-    await writeFile(SCHEMA_FILE, CODEX_REVIEW_SCHEMA);
-    schemaMaterialized = true;
+  const schemaPath = getCodexReviewSchemaPath();
+  // Existence is checked per resolved path: the data directory can change after
+  // import, so a process-wide "written once" flag would keep returning the old
+  // location without ever materializing the file there.
+  if (!existsSync(schemaPath)) {
+    await mkdir(getPlannotatorDataDir(), { recursive: true });
+    await writeFile(schemaPath, CODEX_REVIEW_SCHEMA);
   }
-  return SCHEMA_FILE;
+  return schemaPath;
 }
-
-export { SCHEMA_FILE as CODEX_REVIEW_SCHEMA_PATH };
 
 // ---------------------------------------------------------------------------
 // System prompt — copied verbatim from codex-rs/core/review_prompt.md

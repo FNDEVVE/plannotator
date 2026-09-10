@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import { mkdir, writeFile, readFile, unlink } from "node:fs/promises";
 import { getPlannotatorDataDir } from "@plannotator/shared/data-dir";
 import { loadConfig, resolveCursorSandbox } from "../config";
@@ -475,17 +476,20 @@ export function buildGuideClaudeCommand(prompt: string, model: string = "sonnet"
   };
 }
 
-const GUIDE_SCHEMA_DIR = getPlannotatorDataDir();
-const GUIDE_SCHEMA_FILE = join(GUIDE_SCHEMA_DIR, "guide-schema.json");
-let guideSchemaMaterialized = false;
+/** Materialized schema path under the current data directory. */
+function guideSchemaPath(): string {
+  return join(getPlannotatorDataDir(), "guide-schema.json");
+}
 
 async function ensureGuideSchemaFile(): Promise<string> {
-  if (!guideSchemaMaterialized) {
-    await mkdir(GUIDE_SCHEMA_DIR, { recursive: true });
-    await writeFile(GUIDE_SCHEMA_FILE, GUIDE_SCHEMA_JSON);
-    guideSchemaMaterialized = true;
+  const schemaPath = guideSchemaPath();
+  // Checked per resolved path so a PLANNOTATOR_DATA_DIR change after import
+  // materializes the schema in the new location instead of reusing a flag.
+  if (!existsSync(schemaPath)) {
+    await mkdir(getPlannotatorDataDir(), { recursive: true });
+    await writeFile(schemaPath, GUIDE_SCHEMA_JSON);
   }
-  return GUIDE_SCHEMA_FILE;
+  return schemaPath;
 }
 
 export function generateGuideOutputPath(): string {
