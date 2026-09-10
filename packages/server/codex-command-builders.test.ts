@@ -6,15 +6,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 // Imported statically and BEFORE any PLANNOTATOR_DATA_DIR is set: these modules
 // used to capture the data directory at import, so changing the env var later
 // left every derived path (and the materialized schema) in the old location.
-import { buildCodexCommand } from "./codex-review";
-import { buildGuideCodexCommand } from "./guide/guide-review";
-import { buildTourCodexCommand } from "./tour/tour-review";
+import { buildCodexCommand, CODEX_REVIEW_SCHEMA } from "./codex-review";
+import { buildGuideCodexCommand, GUIDE_SCHEMA_JSON } from "./guide/guide-review";
+import { buildTourCodexCommand, TOUR_SCHEMA_JSON } from "./tour/tour-review";
 
 import { createTestEnvironment } from "../../tests/helpers/environment";
 
@@ -82,5 +82,28 @@ describe("Codex command builders", () => {
 
     expect(schema).toBe(join(second, "codex-review-schema.json"));
     expect(existsSync(schema)).toBe(true);
+  });
+
+  test("overwrite a stale schema file left by an older binary", async () => {
+    // A schema written by an older version persists in the data dir forever
+    // (nothing prunes it). An existence check would keep serving those stale
+    // bytes; every process must refresh the file with its own schema once.
+    const dataDir = process.env.PLANNOTATOR_DATA_DIR!;
+    const stale = '{"stale":"written by an older binary"}';
+    const surfaces = [
+      [buildCodexCommand, "codex-review-schema.json", CODEX_REVIEW_SCHEMA],
+      [buildGuideCodexCommand, "guide-schema.json", GUIDE_SCHEMA_JSON],
+      [buildTourCodexCommand, "tour-schema.json", TOUR_SCHEMA_JSON],
+    ] as const;
+
+    for (const [build, fileName, currentSchema] of surfaces) {
+      const path = join(dataDir, fileName);
+      writeFileSync(path, stale);
+
+      const command = await build(OPTIONS);
+
+      expect(schemaPath(command)).toBe(path);
+      expect(readFileSync(path, "utf-8")).toBe(currentSchema);
+    }
   });
 });

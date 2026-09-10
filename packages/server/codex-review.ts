@@ -5,7 +5,7 @@
  * The review server (review.ts) calls into this module via the agent-jobs callbacks.
  */
 
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { appendFile, mkdir, unlink, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -93,15 +93,20 @@ export function getCodexReviewSchemaPath(): string {
   return join(getPlannotatorDataDir(), "codex-review-schema.json");
 }
 
-/** Ensure the schema file exists on disk and return its path. */
+/** Schema paths this process has already refreshed with its own schema. */
+const materializedSchemaPaths = new Set<string>();
+
+/** Ensure the schema file exists on disk with the current schema and return its path. */
 async function ensureSchemaFile(): Promise<string> {
   const schemaPath = getCodexReviewSchemaPath();
-  // Existence is checked per resolved path: the data directory can change after
-  // import, so a process-wide "written once" flag would keep returning the old
-  // location without ever materializing the file there.
-  if (!existsSync(schemaPath)) {
-    await mkdir(getPlannotatorDataDir(), { recursive: true });
+  // Guarded per resolved path, not per process and not by file existence: the
+  // data directory can change after import (so a process-wide flag would keep
+  // returning the old location), and a stale file left by an older binary must
+  // be overwritten once per process so Codex always gets the current schema.
+  if (!materializedSchemaPaths.has(schemaPath)) {
+    await mkdir(dirname(schemaPath), { recursive: true });
     await writeFile(schemaPath, CODEX_REVIEW_SCHEMA);
+    materializedSchemaPaths.add(schemaPath);
   }
   return schemaPath;
 }
