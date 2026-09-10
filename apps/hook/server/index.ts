@@ -163,7 +163,7 @@ import {
   resolveSessionLogByCwdScan,
   type RenderedMessage,
 } from "./session-log";
-import { findCodexRolloutByThreadId, getLatestCodexPlan, getRecentCodexMessages } from "./codex-session";
+import { findCodexRolloutsByThreadId, getLatestCodexPlan, getRecentCodexMessages } from "./codex-session";
 import { findCopilotPlanContent, findCopilotSessionByAncestorPids, findCopilotSessionForCwd, getRecentCopilotMessages } from "./copilot-session";
 import {
   formatInteractiveNoArgClarification,
@@ -1497,14 +1497,19 @@ if (args[0] === "sessions") {
     if (process.env.PLANNOTATOR_DEBUG) {
       console.error(`[DEBUG] Codex detected, thread ID: ${codexThreadId}`);
     }
-    const rolloutPath = findCodexRolloutByThreadId(codexThreadId);
-    if (rolloutPath) {
+    // A thread can span multiple rollout files; the newest segment may be
+    // empty or aborted, so fall back until one yields a message (#1367).
+    for (const rolloutPath of findCodexRolloutsByThreadId(codexThreadId)) {
       if (process.env.PLANNOTATOR_DEBUG) {
         console.error(`[DEBUG] Rollout: ${rolloutPath}`);
       }
-      recentMessages = getRecentCodexMessages(rolloutPath, RECENT_MESSAGES_LIMIT, { beforeActiveTurn: true })
+      const recent = getRecentCodexMessages(rolloutPath, RECENT_MESSAGES_LIMIT, { beforeActiveTurn: true })
         .map((m) => ({ messageId: m.messageId, text: m.text, lineNumbers: [], timestamp: m.timestamp }));
-      lastMessage = recentMessages[0] ?? null;
+      if (recent.length > 0) {
+        recentMessages = recent;
+        lastMessage = recent[0];
+        break;
+      }
     }
   } else if (isDroid) {
     // Droid/Factory path: resolve the current repo's session log from
@@ -2326,20 +2331,26 @@ if (args[0] === "sessions") {
   }
 
   if (event.hook_event_name === "Stop") {
-    const rolloutPath =
-      (typeof event.transcript_path === "string" && event.transcript_path) ||
-      (process.env.CODEX_THREAD_ID
-        ? findCodexRolloutByThreadId(process.env.CODEX_THREAD_ID)
-        : null);
+    const transcriptPath = typeof event.transcript_path === "string" && event.transcript_path
+      ? event.transcript_path
+      : null;
+    // A thread can span multiple rollout files; the newest segment may hold
+    // no plan while an older one does, so try each in turn (#1367).
+    const rolloutPaths = transcriptPath
+      ? [transcriptPath]
+      : process.env.CODEX_THREAD_ID
+        ? findCodexRolloutsByThreadId(process.env.CODEX_THREAD_ID)
+        : [];
 
-    if (!rolloutPath || !existsSync(rolloutPath)) {
-      process.exit(0);
+    let latestPlan: ReturnType<typeof getLatestCodexPlan> = null;
+    for (const rolloutPath of rolloutPaths) {
+      if (!existsSync(rolloutPath)) continue;
+      latestPlan = getLatestCodexPlan(rolloutPath, {
+        turnId: typeof event.turn_id === "string" ? event.turn_id : undefined,
+        stopHookActive: !!event.stop_hook_active,
+      });
+      if (latestPlan?.text) break;
     }
-
-    const latestPlan = getLatestCodexPlan(rolloutPath, {
-      turnId: typeof event.turn_id === "string" ? event.turn_id : undefined,
-      stopHookActive: !!event.stop_hook_active,
-    });
 
     if (!latestPlan?.text) {
       process.exit(0);

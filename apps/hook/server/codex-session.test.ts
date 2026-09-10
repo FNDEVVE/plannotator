@@ -7,10 +7,16 @@
  */
 
 import { describe, expect, test, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findCodexRolloutByThreadId, getLastCodexMessage, getLatestCodexPlan } from "./codex-session";
+import {
+  findCodexRolloutByThreadId,
+  findCodexRolloutsByThreadId,
+  getLastCodexMessage,
+  getLatestCodexPlan,
+  getRecentCodexMessages,
+} from "./codex-session";
 
 // --- Fixture Helpers ---
 
@@ -180,6 +186,178 @@ describe("findCodexRolloutByThreadId", () => {
       if (prev === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = prev;
     }
+  });
+});
+
+// --- Multi-rollout threads (#1367) ---
+
+/**
+ * One Codex thread can span several rollout files. The newest segment is not
+ * guaranteed to hold the artifact the caller needs (it may be empty or
+ * aborted), so consumers walk the candidates newest-first until one yields
+ * the message/plan they want. These tests pin that contract.
+ */
+describe("multi-rollout threads (#1367)", () => {
+  const THREAD_ID = "0196f8a2-1111-2222-3333-1234567890ab";
+
+  function withCodexHome<T>(home: string, fn: () => T): T {
+    const prev = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = home;
+    try {
+      return fn();
+    } finally {
+      if (prev === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = prev;
+    }
+  }
+
+  function sessionsHome(): string {
+    const home = mkdtempSync(join(tmpdir(), "plannotator-codex-home-"));
+    tempFiles.push(home);
+    return home;
+  }
+
+  /** Write a rollout segment into <home>/sessions/<date>/ with an exact mtime. */
+  function writeSegment(
+    home: string,
+    date: { year: string; month: string; day: string },
+    stamp: string,
+    content: string,
+    mtimeIso: string
+  ): string {
+    const dayDir = join(home, "sessions", date.year, date.month, date.day);
+    mkdirSync(dayDir, { recursive: true });
+    const path = join(dayDir, `rollout-${stamp}-${THREAD_ID}.jsonl`);
+    writeFileSync(path, content);
+    const mtime = new Date(mtimeIso);
+    utimesSync(path, mtime, mtime);
+    return path;
+  }
+
+  /** Mirrors the annotate-last selection in index.ts. */
+  function resolveLastMessage(home: string): string | null {
+    return withCodexHome(home, () => {
+      for (const rollout of findCodexRolloutsByThreadId(THREAD_ID)) {
+        const recent = getRecentCodexMessages(rollout, 25, { beforeActiveTurn: true });
+        if (recent.length > 0) return recent[0].text;
+      }
+      return null;
+    });
+  }
+
+  /** Mirrors the Stop-hook plan selection in index.ts. */
+  function resolvePlan(home: string): string | null {
+    return withCodexHome(home, () => {
+      for (const rollout of findCodexRolloutsByThreadId(THREAD_ID)) {
+        const plan = getLatestCodexPlan(rollout, {});
+        if (plan?.text) return plan.text;
+      }
+      return null;
+    });
+  }
+
+  test("same day: falls back to an older segment when the newest is empty", () => {
+    const home = sessionsHome();
+    const day = { year: "2026", month: "06", day: "04" };
+    const older = writeSegment(
+      home,
+      day,
+      "2026-06-04T10-00-00",
+      buildRollout(sessionMeta(), userMessage("Hello"), assistantMessage("Older segment answer")),
+      "2026-06-04T10:00:00Z"
+    );
+    const newer = writeSegment(
+      home,
+      day,
+      "2026-06-04T11-00-00",
+      buildRollout(sessionMeta(), userMessage("Hello")),
+      "2026-06-04T11:00:00Z"
+    );
+
+    withCodexHome(home, () => {
+      expect(findCodexRolloutsByThreadId(THREAD_ID)).toEqual([newer, older]);
+      expect(findCodexRolloutByThreadId(THREAD_ID)).toBe(newer);
+    });
+    expect(resolveLastMessage(home)).toBe("Older segment answer");
+  });
+
+  test("multi day: falls back across day directories", () => {
+    const home = sessionsHome();
+    const older = writeSegment(
+      home,
+      { year: "2026", month: "06", day: "04" },
+      "2026-06-04T22-00-00",
+      buildRollout(sessionMeta(), assistantMessage("Reply from the previous day")),
+      "2026-06-04T22:00:00Z"
+    );
+    const newer = writeSegment(
+      home,
+      { year: "2026", month: "06", day: "05" },
+      "2026-06-05T09-00-00",
+      buildRollout(sessionMeta(), userMessage("Resumed")),
+      "2026-06-05T09:00:00Z"
+    );
+
+    withCodexHome(home, () => {
+      expect(findCodexRolloutsByThreadId(THREAD_ID)).toEqual([newer, older]);
+    });
+    expect(resolveLastMessage(home)).toBe("Reply from the previous day");
+  });
+
+  test("single rollout thread is unchanged", () => {
+    const home = sessionsHome();
+    const only = writeSegment(
+      home,
+      { year: "2026", month: "06", day: "04" },
+      "2026-06-04T10-00-00",
+      buildRollout(sessionMeta(), assistantMessage("Only answer")),
+      "2026-06-04T10:00:00Z"
+    );
+
+    withCodexHome(home, () => {
+      expect(findCodexRolloutsByThreadId(THREAD_ID)).toEqual([only]);
+      expect(findCodexRolloutByThreadId(THREAD_ID)).toBe(only);
+      expect(findCodexRolloutsByThreadId("no-such-thread")).toEqual([]);
+    });
+    expect(resolveLastMessage(home)).toBe("Only answer");
+  });
+
+  test("single empty rollout still reports no message", () => {
+    const home = sessionsHome();
+    writeSegment(
+      home,
+      { year: "2026", month: "06", day: "04" },
+      "2026-06-04T10-00-00",
+      buildRollout(sessionMeta(), userMessage("Hello")),
+      "2026-06-04T10:00:00Z"
+    );
+
+    expect(resolveLastMessage(home)).toBeNull();
+  });
+
+  test("Stop hook plan falls back to an older segment", () => {
+    const home = sessionsHome();
+    const day = { year: "2026", month: "06", day: "04" };
+    writeSegment(
+      home,
+      day,
+      "2026-06-04T10-00-00",
+      buildRollout(
+        sessionMeta(),
+        turnStarted("turn-1"),
+        assistantMessage("<proposed_plan>\nOlder segment plan\n</proposed_plan>")
+      ),
+      "2026-06-04T10:00:00Z"
+    );
+    writeSegment(
+      home,
+      day,
+      "2026-06-04T11-00-00",
+      buildRollout(sessionMeta(), turnStarted("turn-2"), assistantMessage("No plan here.")),
+      "2026-06-04T11:00:00Z"
+    );
+
+    expect(resolvePlan(home)).toBe("Older segment plan");
   });
 });
 

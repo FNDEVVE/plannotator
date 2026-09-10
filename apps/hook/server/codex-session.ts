@@ -75,17 +75,32 @@ function codexHome(): string {
   return process.env.CODEX_HOME || join(homedir(), ".codex");
 }
 
+function mtimeMs(path: string): number {
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
 /**
- * Find the Codex rollout file for a given thread ID.
+ * Find every Codex rollout file for a given thread ID, newest first.
  * The thread ID is the UUID portion of the filename:
  *   rollout-<timestamp>-<uuid>.jsonl
  *
- * Scans $CODEX_HOME/sessions/ (default ~/.codex/sessions/) for a matching file.
+ * A single thread can span multiple rollout files (Codex segments long
+ * conversations), and the newest segment is not guaranteed to hold the
+ * artifact a caller needs — it may be empty or aborted. Callers must fall
+ * back across the candidates instead of trusting the first one (#1367).
+ *
+ * Scans $CODEX_HOME/sessions/ (default ~/.codex/sessions/).
  */
-export function findCodexRolloutByThreadId(threadId: string): string | null {
+export function findCodexRolloutsByThreadId(threadId: string): string[] {
   const sessionsDir = join(codexHome(), "sessions");
 
   try {
+    const matches: string[] = [];
+
     // Walk YYYY/MM/DD directories in reverse order (most recent first)
     const years = readdirSync(sessionsDir).sort().reverse();
     for (const year of years) {
@@ -102,20 +117,33 @@ export function findCodexRolloutByThreadId(threadId: string): string | null {
           const dayDir = join(monthDir, day);
           if (!isDir(dayDir)) continue;
 
-          const files = readdirSync(dayDir);
-          for (const file of files) {
+          for (const file of readdirSync(dayDir)) {
             if (file.endsWith(".jsonl") && file.includes(threadId)) {
-              return join(dayDir, file);
+              matches.push(join(dayDir, file));
             }
           }
         }
       }
     }
-  } catch {
-    return null;
-  }
 
-  return null;
+    // Newest first by mtime; the filename carries the same timestamp, so a
+    // filename comparison breaks ties and covers a failed stat.
+    return matches.sort((a, b) => {
+      const byMtime = mtimeMs(b) - mtimeMs(a);
+      return byMtime !== 0 ? byMtime : b.localeCompare(a);
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Find the newest Codex rollout file for a given thread ID.
+ * Callers that need to survive an empty newest segment (a thread split
+ * across rollout files) should use findCodexRolloutsByThreadId instead (#1367).
+ */
+export function findCodexRolloutByThreadId(threadId: string): string | null {
+  return findCodexRolloutsByThreadId(threadId)[0] ?? null;
 }
 
 function isDir(path: string): boolean {
