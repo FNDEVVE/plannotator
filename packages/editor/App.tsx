@@ -2797,10 +2797,24 @@ const App: React.FC = () => {
   // mirrors the card's `Done` exactly, including the two-step `Cancel →
   // Discard` refusal: with unsaved source-backed changes the chord is a no-op,
   // never a silent discard.
+  //
+  // NOTE: mounting atomic-editor's `selectionToolbar()` on this CodeMirror
+  // instance would dead-key this chord — that extension claims Mod-e and
+  // preventDefaults it before the event ever bubbles out to this listener.
   useEffect(() => {
     if (!isEditingMarkdown) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'e' || !(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
+      if (event.key.toLowerCase() !== 'e' || !(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
+      // Native text fields keep Mod+E (macOS "use selection for find", etc.):
+      // only serve the chord from CodeMirror's contenteditable or the chrome.
+      // CodeMirror's content DOM is contenteditable, never INPUT/TEXTAREA, so
+      // this cannot break the exit-from-editor path.
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') &&
+        !target.closest('.cm-editor')
+      ) return;
       if (chromeShortcutBlocked(event)) return;
       event.preventDefault();
       if (cancelMode) return;

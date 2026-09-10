@@ -221,6 +221,30 @@ describe.if(hasDom)("Mod+E edit-mode toggle", () => {
     expect(document.querySelector(".cm-editor")).toBeNull();
   });
 
+  test("leaves the chord to a foreign text field, but still exits from CodeMirror", async () => {
+    await mount(ANNOTATE_PLAN);
+
+    await act(async () => { pressModE(document.body); });
+    const content = document.querySelector<HTMLElement>(".cm-editor .cm-content");
+    if (!content) throw new Error("CodeMirror content DOM did not render");
+
+    // Mod+E dispatched from a textarea outside the editor (Ask AI box, an
+    // annotation comment mid-edit-session) must stay the field's own chord:
+    // the session may not commit-and-exit underneath it.
+    const foreign = document.createElement("textarea");
+    document.body.appendChild(foreign);
+    try {
+      await act(async () => { pressModE(foreign); });
+      expect(document.querySelector(".cm-editor")).not.toBeNull();
+    } finally {
+      foreign.remove();
+    }
+
+    // From inside CodeMirror's contenteditable the exit still fires.
+    await act(async () => { pressModE(content); });
+    expect(document.querySelector(".cm-editor")).toBeNull();
+  });
+
   test("never discards an unsaved source-backed buffer silently", async () => {
     await mount({
       plan: "# Source document\n\nEditable body.\n",
@@ -248,13 +272,32 @@ describe.if(hasDom)("Mod+E edit-mode toggle", () => {
     if (!content) throw new Error("CodeMirror content DOM did not render");
     expect(saveLabel()).toBe("Saved");
 
-    // Dirty the buffer through the editor's own DOM observer, the way typing
-    // does. The toolstrip's Save/Saved pair and its `Done`/`Cancel` exit
-    // control are the state machine's readouts.
+    // Dirty the buffer through the editor's own input pipeline: a
+    // document-changing dispatch on the mounted view. (Mutating the
+    // contentEditable's DOM and waiting on CodeMirror's MutationObserver is
+    // not viable under happy-dom: after CodeMirror's stop()/start() observer
+    // cycling, happy-dom intermittently never re-delivers records, so the
+    // mutation is lost no matter how long the test waits — the CI flake this
+    // replaced.) The view is resolved from CodeMirror's DOM back-reference —
+    // the same property EditorView.findFromDOM reads; @codemirror/view is not
+    // a dependency of this package, and both of the property's historical
+    // names are tried so a rename fails loudly here rather than silently.
+    const backRef = content as unknown as {
+      cmTile?: { view?: { state: { doc: { toString(): string } }; dispatch(spec: unknown): void } };
+      cmView?: { view?: { state: { doc: { toString(): string } }; dispatch(spec: unknown): void } };
+    };
+    const view = backRef.cmTile?.view ?? backRef.cmView?.view;
+    if (!view) throw new Error("EditorView not found from CodeMirror DOM back-reference");
     await act(async () => {
-      content.textContent = `${content.textContent ?? ""}x`;
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      view.dispatch({
+        changes: { from: view.state.doc.toString().trimEnd().length, insert: "x" },
+      });
     });
+    // The dirty flip lands through React state — poll (bounded) rather than
+    // racing a single macrotask, same settle pattern as mount().
+    for (let attempt = 0; attempt < 40 && saveLabel() !== "Save"; attempt += 1) {
+      await settle();
+    }
     expect(saveLabel()).toBe("Save");
     expect(findButton("Cancel")).not.toBeUndefined();
 
