@@ -89,9 +89,12 @@ function mtimeMs(path: string): number {
  *   rollout-<timestamp>-<uuid>.jsonl
  *
  * A single thread can span multiple rollout files (Codex segments long
- * conversations), and the newest segment is not guaranteed to hold the
- * artifact a caller needs — it may be empty or aborted. Callers must fall
- * back across the candidates instead of trusting the first one (#1367).
+ * conversations). Fallback semantics are the CALLER's decision (#1367):
+ * thread-level questions (annotate-last) fall back across candidates because
+ * the newest segment may be empty or aborted, while turn-level questions
+ * (the Stop hook's plan detection) must take only the first existing
+ * candidate — the current turn cannot live in an older segment, so anything
+ * a fallback file yields there is stale by construction.
  *
  * Scans $CODEX_HOME/sessions/ (default ~/.codex/sessions/).
  */

@@ -2334,23 +2334,29 @@ if (args[0] === "sessions") {
     const transcriptPath = typeof event.transcript_path === "string" && event.transcript_path
       ? event.transcript_path
       : null;
-    // A thread can span multiple rollout files; the newest segment may hold
-    // no plan while an older one does, so try each in turn (#1367).
+    // A thread can span multiple rollout files, but the Stop hook asks a
+    // TURN-level question and the current turn can only live in the newest
+    // segment. Take the first existing candidate only — never fall back to an
+    // older segment: findTurnStartIndex degrades to last-turn-in-file when
+    // the turn_id is absent, so a fallback file's plan is stale by
+    // construction (older segments routinely end with an already-decided
+    // <proposed_plan>) and would deterministically reopen settled plan
+    // reviews on every turn end. Contrast the annotate-last leg above, which
+    // asks a thread-level question and correctly falls back across segments
+    // (#1367).
     const rolloutPaths = transcriptPath
       ? [transcriptPath]
       : process.env.CODEX_THREAD_ID
         ? findCodexRolloutsByThreadId(process.env.CODEX_THREAD_ID)
         : [];
+    const rolloutPath = rolloutPaths.find((path) => existsSync(path)) ?? null;
 
-    let latestPlan: ReturnType<typeof getLatestCodexPlan> = null;
-    for (const rolloutPath of rolloutPaths) {
-      if (!existsSync(rolloutPath)) continue;
-      latestPlan = getLatestCodexPlan(rolloutPath, {
-        turnId: typeof event.turn_id === "string" ? event.turn_id : undefined,
-        stopHookActive: !!event.stop_hook_active,
-      });
-      if (latestPlan?.text) break;
-    }
+    const latestPlan = rolloutPath
+      ? getLatestCodexPlan(rolloutPath, {
+          turnId: typeof event.turn_id === "string" ? event.turn_id : undefined,
+          stopHookActive: !!event.stop_hook_active,
+        })
+      : null;
 
     if (!latestPlan?.text) {
       process.exit(0);
