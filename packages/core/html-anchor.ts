@@ -83,7 +83,13 @@ export const MAX_HTML_TARGET_TEXT_LENGTH = 400;
 export const MAX_HTML_ADDITIONAL_TARGETS = 16;
 /** Default byte budget for a persisted anchor (16 KiB of UTF-8 JSON). */
 export const DEFAULT_HTML_ANCHOR_MAX_BYTES = 16 * 1024;
+/** Serialized bound for one element context (2 KiB of UTF-8 JSON). */
 export const MAX_ELEMENT_CONTEXT_BYTES = 2048;
+/**
+ * Cap for live-app page identity strings (mirrors the bridge's own slice).
+ * The single definition: `@plannotator/ui`'s parent trust boundary imports
+ * and re-exports it from here rather than keeping its own copy.
+ */
 export const MAX_PAGE_URL_LENGTH = 2048;
 const MAX_CONTEXT_TAG_LENGTH = 32;
 const MAX_CONTEXT_ID_LENGTH = 100;

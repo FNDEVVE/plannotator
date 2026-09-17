@@ -12,6 +12,7 @@ import { BRIDGE_PROTOCOL_VERSION } from "./bridge-script";
 import {
   parseHtmlElementContext,
   MAX_ELEMENT_CONTEXT_BYTES,
+  MAX_PAGE_URL_LENGTH,
 } from "@plannotator/core/html-anchor";
 
 const PREFIX = "plannotator-bridge-";
@@ -136,9 +137,6 @@ export interface HtmlLiveSession {
   origin: string;
   token: string;
 }
-
-/** Cap for live-mode page identity strings (mirrors the bridge's slice). */
-export const MAX_PAGE_URL_LENGTH = 2048;
 
 /** Cap for a link href relayed out of the framed document. */
 const MAX_LINK_HREF_LENGTH = 2048;
@@ -330,9 +328,13 @@ function parseTargetLabel(value: unknown): string | undefined {
     : collapsed;
 }
 
+// Re-exported so `components/html-viewer` stays the one import site a host
+// needs for the parent trust boundary; the definitions live in
+// `@plannotator/core/html-anchor`, never mirrored here.
 export {
   parseHtmlElementContext,
   MAX_ELEMENT_CONTEXT_BYTES,
+  MAX_PAGE_URL_LENGTH,
 };
 
 function parseBridgeRect(value: unknown): BridgeRect | null {
