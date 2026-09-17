@@ -6,13 +6,17 @@
  *   bounded record a host can persist (target cap, byte budget).
  * - `projectHostThreads` projects stored host rows back onto the viewer's
  *   `annotations` prop shape, in the order that becomes the marker numbering.
+ * - `parseHtmlElementAnchor` and `parseHtmlElementContext` are the pure,
+ *   fail-closed validators both of those run on the way through.
  *
  * Browser-safe and dependency-free (this package is `@plannotator/core`).
- * The types below are structurally identical to `HtmlElementAnchor` and
- * `HtmlAnnotationTarget` in `@plannotator/ui/types`; the validators mirror
- * the caps `@plannotator/ui` enforces at its own parent trust boundary
- * (`components/html-viewer/useHtmlAnnotation.ts`), so nothing persisted here
- * is ever refused on read.
+ * The types below are structurally identical to `HtmlElementAnchor`,
+ * `HtmlAnnotationTarget` and `HtmlElementContext` in `@plannotator/ui/types`,
+ * and the caps here ARE the caps enforced at `@plannotator/ui`'s own parent
+ * trust boundary (`components/html-viewer/useHtmlAnnotation.ts`), which
+ * imports and re-exports these validators rather than keeping its own copy —
+ * one definition, never mirrored — so nothing persisted here is ever refused
+ * on read.
  */
 
 export interface HtmlAnchorPoint {
