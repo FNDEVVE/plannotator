@@ -43,6 +43,7 @@ export type DiffType =
   | `commit:${string}`
   | `worktree:${string}`
   | `gitbutler:${string}`
+  | "static-patch"
   | "p4-default"
   | `p4-changelist:${string}`;
 
@@ -82,6 +83,39 @@ export interface RepositoryContext {
   displayFallback?: string;
 }
 
+export interface ReviewBaseCandidate {
+  revision: string;
+  labels: string[];
+  subject: string;
+}
+
+export interface ReviewDiffFallback {
+  requestedDiffType: string;
+  effectiveDiffType: string;
+  message: string;
+  candidates?: ReviewBaseCandidate[];
+}
+
+export interface DiffAvailability {
+  fallbackDiffType: string;
+  message: string;
+  candidates?: ReviewBaseCandidate[];
+}
+
+export interface JjRevisionInfo {
+  /** Full immutable commit ID used for every review computation. */
+  commitId: string;
+  /** Names that pointed at this revision when it was resolved. */
+  bookmarks: string[];
+  /** First line of the revision description, for disambiguation in pickers. */
+  subject: string;
+}
+
+export type JjLineBaseResolution =
+  | { kind: "resolved"; revision: JjRevisionInfo }
+  | { kind: "ambiguous"; candidates: JjRevisionInfo[] }
+  | { kind: "unavailable"; reason: string };
+
 export interface JjEvoLogEntry {
   /** Short commit ID (12 hex chars) */
   commitId: string;
@@ -112,10 +146,16 @@ export interface GitContext {
   availableBranches: AvailableBranches;
   compareTarget?: CompareTargetConfig;
   repository?: RepositoryContext;
+  /** Provider-authored fallback for modes that cannot resolve in this repository. */
+  diffAvailability?: Record<string, DiffAvailability>;
+  /** Requested and effective modes when startup used one of those fallbacks. */
+  diffFallback?: ReviewDiffFallback;
   cwd?: string;
   vcsType?: "git" | "gitbutler" | "jj" | "p4";
   /** Hash of the exact GitButler branch/commit topology used for this context. */
   gitButlerRevision?: string;
+  /** Automatic line-of-work base resolution (jj only). */
+  jjLineBase?: JjLineBaseResolution;
   /** Evolution log entries for the current jj change (jj only). */
   jjEvologs?: JjEvoLogEntry[];
   /** HEAD ancestry, newest first. Powers the commit-based baseline picker (#709). */
@@ -651,10 +691,6 @@ export async function getGitContext(
       )
     ).exitCode === 0;
     if (baseResolves) {
-      // Dynamic label so it matches the live gitRef header ("All changes
-      // since origin/main" / "... since master") rather than a hardcoded
-      // base name that contradicts it on non-main repos. The product/
-      // first-run copy uses the short form "All changes".
       diffOptions.push({ id: "since-base", label: `All changes since ${displayRef(defaultBranch)}` });
     }
   }
@@ -2440,3 +2476,24 @@ export function isBinaryPatchFile(patch: string, filePath: string): boolean {
   }
   return false;
 }
+
+/**
+ * The `static-patch` diff type: the session's content is caller-supplied
+ * unified-diff bytes (`plannotator review --patch-file`), not something a VCS
+ * computed. Nothing in the session may read the working tree.
+ */
+export const STATIC_PATCH_DIFF_TYPE = "static-patch";
+
+/**
+ * Where the session's diff came from, advertised on every diff payload
+ * (`/api/diff` and the switch/PR endpoints) beside `approvalNotesSupported`.
+ * ABSENT reads as `"vcs"`, so an old server is unchanged and an old client
+ * ignoring the field behaves exactly as it always has.
+ *
+ * `"patch"` means static-patch mode: there is no repository, no working tree
+ * and no VCS behind the diff, so every affordance that would touch one
+ * (staging, hunk-context expansion, open-in-app, code navigation, diff-type /
+ * base switching, commit history, baseline freshness) is unavailable and the
+ * corresponding endpoints answer 400.
+ */
+export type ReviewSourceKind = "vcs" | "patch";
