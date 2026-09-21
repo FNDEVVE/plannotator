@@ -1799,6 +1799,70 @@ body`;
       },
     ]);
   });
+
+  test("a quoted key is still a mapping entry, not a dropped row", () => {
+    // Regression: the quoted-scalar guard swallowed the whole line, so
+    // `"title": "Doc"` produced {} and the row vanished from the
+    // frontmatter card entirely.
+    const md = `---
+"title": "Doc"
+'status': draft
+"nested":
+  k: v
+---
+body`;
+    const { frontmatter } = extractFrontmatter(md);
+    // Values keep their quotes exactly as an unquoted key would produce
+    // (`title: "Doc"`); only the KEY's quotes are structural.
+    expect(frontmatter).toEqual({
+      title: '"Doc"',
+      status: "draft",
+      nested: { k: "v" },
+    });
+  });
+
+  test("a quoted key parses identically to the same key unquoted", () => {
+    // The point of the fix: quoting a key changes nothing but the key text.
+    const quoted = extractFrontmatter('---\n"title": "Doc"\n"n":\n  k: v\n---\nb');
+    const plain = extractFrontmatter('---\ntitle: "Doc"\nn:\n  k: v\n---\nb');
+    expect(quoted.frontmatter).toEqual(plain.frontmatter!);
+  });
+
+  test("a line that is only a quoted scalar is still not a mapping entry", () => {
+    const md = `---
+ok: 1
+"just a string"
+"nospace":"value"
+---
+body`;
+    const { frontmatter } = extractFrontmatter(md);
+    expect(frontmatter).toEqual({ ok: "1" });
+  });
+
+  test("a nested map as an item's FIRST key does not swallow its siblings", () => {
+    // Regression: the pending key recorded the dash's indent, so `id`
+    // (indented to the key's column, not the dash's) landed inside `meta`.
+    const md = `---
+items:
+  - meta:
+      k: v
+    id: 1
+---
+body`;
+    const { frontmatter } = extractFrontmatter(md);
+    expect(frontmatter?.items).toEqual([{ meta: { k: "v" }, id: "1" }]);
+  });
+
+  test("an item whose only key is an empty map does not absorb the next item", () => {
+    const md = `---
+items:
+  - meta:
+  - id: 1
+---
+body`;
+    const { frontmatter } = extractFrontmatter(md);
+    expect(frontmatter?.items).toEqual([{}, { id: "1" }]);
+  });
 });
 
 describe("parseMarkdownToBlocks — startLine accuracy", () => {

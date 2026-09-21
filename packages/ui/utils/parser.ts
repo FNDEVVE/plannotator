@@ -94,8 +94,22 @@ function parseBlockScalar(
  * is not a valid YAML mapping entry (e.g. scalar URLs or quoted strings).
  */
 function parseKeyValue(str: string): { key: string; value: string } | null {
-  if ((str.startsWith('"') && str.endsWith('"')) || (str.startsWith("'") && str.endsWith("'"))) {
-    return null;
+  // A QUOTED KEY is still a mapping entry: `"title": "Doc"` must yield
+  // { title: "Doc" }, not nothing. Only a line that is nothing but a quoted
+  // scalar (`"just a string"`) is not an entry — which is the case the char
+  // after the closing quote distinguishes.
+  const quote = str[0];
+  if (quote === '"' || quote === "'") {
+    const closing = str.indexOf(quote, 1);
+    if (closing === -1) return null;
+    if (str[closing + 1] !== ':') return null;
+    // Same rule the unquoted branch applies: `key:value` is a scalar, not a
+    // mapping entry. A colon at end of line (empty value) is fine.
+    const afterColon = str[closing + 2];
+    if (afterColon !== undefined && afterColon !== ' ' && afterColon !== '\t') {
+      return null;
+    }
+    return { key: str.slice(1, closing), value: str.slice(closing + 2).trim() };
   }
   const colonIndex = str.indexOf(':');
   if (colonIndex <= 0) return null;
@@ -200,7 +214,12 @@ export function extractFrontmatter(markdown: string): { frontmatter: Frontmatter
         if (scalarVal) {
           mapElem[kv.key] = scalarVal;
         } else {
-          pendingKey = { key: kv.key, indent: lineIndent, parentMap: mapElem };
+          // The key sits two columns right of the dash (`- meta:`), so that —
+          // not the dash's own indent — is the indent its nested block must be
+          // measured against. Recording `lineIndent` here made the nested map
+          // swallow the item's later sibling keys, because a sibling indented
+          // to the key's column never dedented past the dash.
+          pendingKey = { key: kv.key, indent: lineIndent + 2, parentMap: mapElem };
         }
 
         if (targetArray) {
