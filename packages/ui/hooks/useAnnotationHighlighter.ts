@@ -631,7 +631,13 @@ export interface UseAnnotationHighlighterReturn {
   handleQuickLabel: (label: QuickLabel) => void;
   handleToolbarClose: () => void;
   handleRequestComment: (initialChar?: string) => void;
-  handleCommentSubmit: (text: string, images?: ImageAttachment[]) => void;
+  /** The composer's submit. `mentions` arrives only from a `CommentPopover`
+   *  the host gave a `mentionSource`; the ids ride onto the new annotation. */
+  handleCommentSubmit: (
+    text: string,
+    images?: ImageAttachment[],
+    mentions?: readonly string[],
+  ) => void;
   handleCommentClose: () => void;
   handleFloatingQuickLabel: (label: QuickLabel) => void;
   handleQuickLabelPickerDismiss: () => void;
@@ -870,6 +876,7 @@ export function useAnnotationHighlighter({
     images?: ImageAttachment[],
     isQuickLabel?: boolean,
     quickLabelTip?: string,
+    mentions?: readonly string[],
   ) => {
     const doms = highlighter.getDoms(source.id);
     let blockId = '';
@@ -904,6 +911,9 @@ export function useAnnotationHighlighter({
       startMeta: source.startMeta,
       endMeta: source.endMeta,
       images,
+      // Host capability: present only when a mentionSource was supplied AND a
+      // token survived, so an annotation created without one is unchanged.
+      ...(mentions && mentions.length > 0 ? { mentions } : {}),
       ...(mathTargets.length > 0 ? {
         mathTargets: mathTargets.map(target => ({
           blockId: target.blockId,
@@ -933,6 +943,7 @@ export function useAnnotationHighlighter({
     images?: ImageAttachment[],
     isQuickLabel?: boolean,
     quickLabelTip?: string,
+    mentions?: readonly string[],
   ) => {
     const id = annotationId();
     applyMathAnnotationClass(source.element, id, type, source.displayMode);
@@ -951,6 +962,7 @@ export function useAnnotationHighlighter({
       createdA: Date.now(),
       author: getIdentity(),
       images,
+      ...(mentions && mentions.length > 0 ? { mentions } : {}),
       ...(isQuickLabel ? { isQuickLabel: true } : {}),
       ...(quickLabelTip ? { quickLabelTip } : {}),
     };
@@ -1036,6 +1048,11 @@ export function useAnnotationHighlighter({
 
     anns.forEach(ann => {
       if (ann.type === AnnotationType.GLOBAL_COMMENT) return;
+      // A comment on a rendered diagram part has no text anchor: the
+      // diagram overlay restores it against its render and reports its own
+      // verdict, so it is neither attempted nor unanchored here (the same
+      // rule the raw-HTML pinpoints follow on their surface).
+      if (ann.diagramAnchor) return;
       attempted.push(ann.id);
 
       // Skip if already highlighted
@@ -1690,7 +1707,11 @@ export function useAnnotationHighlighter({
     setToolbarState(null);
   };
 
-  const handleCommentSubmit = (text: string, images?: ImageAttachment[]) => {
+  const handleCommentSubmit = (
+    text: string,
+    images?: ImageAttachment[],
+    mentions?: readonly string[],
+  ) => {
     if (!commentPopover) return;
     if (isMathAnnotationSource(commentPopover.source)) {
       createAnnotationFromMathSource(
@@ -1698,6 +1719,9 @@ export function useAnnotationHighlighter({
         AnnotationType.COMMENT,
         text,
         images,
+        undefined,
+        undefined,
+        mentions,
       );
       clearPendingSelection();
       window.getSelection()?.removeAllRanges();
@@ -1707,7 +1731,7 @@ export function useAnnotationHighlighter({
     if (commentPopover.source && highlighterRef.current) {
       createAnnotationFromSource(
         highlighterRef.current, commentPopover.source,
-        AnnotationType.COMMENT, text, images
+        AnnotationType.COMMENT, text, images, undefined, undefined, mentions
       );
       clearPendingSelection();
       window.getSelection()?.removeAllRanges();

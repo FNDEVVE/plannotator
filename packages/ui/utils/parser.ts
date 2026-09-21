@@ -1,6 +1,7 @@
 import type { Block, Annotation, CodeAnnotation, EditorAnnotation, ImageAttachment } from '../types';
 import { planDenyFeedback } from '@plannotator/core/feedback-templates';
 import { resolveReplyParents } from '@plannotator/core/annotation-threads';
+import { diagramAnchorLocationLine, parseDiagramAnchor } from '@plannotator/core/diagram-anchor';
 import { skillReferenceExportBlock } from './skillReferences';
 
 /**
@@ -632,6 +633,39 @@ export const resolveReferenceLinks = (markdown: string): string => {
 };
 
 /**
+ * The block list for a whole-file diagram source (`plannotator annotate
+ * flow.mmd`): ONE code block carrying the file's raw text, which `Viewer`
+ * hands to the same `DiagramBlock` a ```mermaid fence in a plan produces.
+ * Everything downstream — diagram comments, the annotations rail, the export's
+ * `Diagram node <label> (<id>), line <n>` location line, drafts, restore — is
+ * the fence path unchanged.
+ *
+ * `diagramSourceLineOffset: 0` is the load-bearing part. `DiagramBlock` passes
+ * it as the viewer's `sourceLineOffset` and the codec adds it to the 1-based
+ * line WITHIN the diagram source; for a fence that offset is the fence's own
+ * opening line, which sits one line above the diagram's first line. A diagram
+ * FILE has no fence, so its first line is document line 1 and the offset is 0
+ * — the 1 a synthesized ```mermaid wrapper would produce puts every exported
+ * diagram line one too high. `startLine`/`sourceLineCount` still describe the
+ * block itself, so the export's `(lines a–b)` label names the file's real
+ * span.
+ */
+export const diagramDocumentBlocks = (text: string, kind: 'mermaid' | 'graphviz'): Block[] => [
+  {
+    id: 'block-0',
+    type: 'code',
+    content: text,
+    // `dot` is what isGraphvizLanguage reads for the Graphviz engine.
+    language: kind === 'graphviz' ? 'dot' : 'mermaid',
+    order: 1,
+    startLine: 1,
+    // A trailing newline ends the last line, it does not start another.
+    sourceLineCount: text === '' ? 0 : text.replace(/\n$/, '').split('\n').length,
+    diagramSourceLineOffset: 0,
+  },
+];
+
+/**
  * A simplified markdown parser that splits content into linear blocks.
  * For a production app, we would use a robust AST walker (remark),
  * but for this demo, we want predictable text-anchoring.
@@ -1222,6 +1256,9 @@ export interface ElementContextExportOptions {
   /** Emit the live-app route line. The grouped export already prints a
    *  `## Page:` heading, so it passes false; a single copied entry passes true. */
   includeRoute?: boolean;
+  /** Print the identity lines WITHOUT the fenced outline, for model turns where
+   *  the 600-char outline is the expensive part. Default true. */
+  includeOutline?: boolean;
 }
 
 /** The agent-facing element block for a raw-HTML / live-app pinpoint: a
@@ -1232,8 +1269,9 @@ export interface ElementContextExportOptions {
 export const elementContextExportBlock = (ann: any, opts: ElementContextExportOptions = {}): string => {
   const context = ann?.elementContext;
   if (!context || typeof context !== 'object' || typeof context.tag !== 'string') return '';
+  const includeOutline = opts.includeOutline ?? true;
   let block = '';
-  if (typeof context.outline === 'string' && context.outline.trim()) {
+  if (includeOutline && typeof context.outline === 'string' && context.outline.trim()) {
     // Fence at 4 backticks; the boundary already defuses 3+ runs inside the
     // outline, and a 4-run here cannot be closed by anything the page wrote.
     const outline = context.outline.replace(/`{3,}/g, "'''").trim();
@@ -1336,10 +1374,14 @@ export const exportAnnotationEntry = (ann: any, opts: ElementContextExportOption
         output += `[${ann.text}] ${commentHeadingLine(ann)}\n`;
         if (ann.quickLabelTip) output += `> ${ann.quickLabelTip}\n`;
       } else {
-        output += `${commentHeadingLine(ann)}\n> ${ann?.text ?? ''}\n`;
+        output += `${commentHeadingLine(ann)}\n${diagramLocationExportLine(ann)}> ${ann?.text ?? ''}\n`;
       }
   }
-  output += elementContextExportBlock(ann, opts);
+  const resolvedOpts: ElementContextExportOptions = {
+    includeRoute: opts.includeRoute ?? true,
+    ...(opts.includeOutline !== undefined ? { includeOutline: opts.includeOutline } : {}),
+  };
+  output += elementContextExportBlock(ann, resolvedOpts);
   output += additionalTargetsExportBlock(ann);
   if (Array.isArray(ann?.images) && ann.images.length > 0) {
     output += `**Attached images:**\n`;
@@ -1348,6 +1390,16 @@ export const exportAnnotationEntry = (ann: any, opts: ElementContextExportOption
     });
   }
   return output;
+};
+
+/** The location line under a comment made on a rendered diagram part:
+ *  `Diagram node Approve? (D), line 4` — the part's own id (what the agent
+ *  greps the fence for) and the DOCUMENT line that declares it. Emits
+ *  nothing for every other annotation, keeping their output byte-identical;
+ *  a malformed anchor (an older or foreign writer) is skipped, never thrown. */
+const diagramLocationExportLine = (ann: any): string => {
+  const anchor = ann?.diagramAnchor === undefined ? null : parseDiagramAnchor(ann.diagramAnchor);
+  return anchor === null ? '' : `${safeInline(diagramAnchorLocationLine(anchor), 600)}\n`;
 };
 
 const lineLabelForAnnotation = (blocks: Block[], ann: any): string | null => {
@@ -1518,11 +1570,13 @@ export const exportAnnotations = (
       case 'COMMENT':
         if (ann.isQuickLabel) {
           output += `[${ann.text}] ${commentHeadingLine(ann)}\n`;
+          output += diagramLocationExportLine(ann);
           if (ann.quickLabelTip) {
             output += `> ${ann.quickLabelTip}\n`;
           }
         } else {
           output += `${commentHeadingLine(ann)}\n`;
+          output += diagramLocationExportLine(ann);
           output += `> ${ann.text}\n`;
         }
         break;
@@ -1637,6 +1691,7 @@ export const exportLinkedDocAnnotations = (
 
         case 'COMMENT':
           output += `${commentHeadingLine(ann)}\n`;
+          output += diagramLocationExportLine(ann);
           output += `> ${ann.text}\n`;
           break;
 
